@@ -7,6 +7,7 @@
   <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
 
   <script>
+    const THREE = AFRAME.THREE;
     /* ------------------------------------------------------------------
      * grabbable: marks an entity as something a controller can pick up.
      * Handles its own hover / grab highlight.
@@ -40,10 +41,11 @@
      * ------------------------------------------------------------------ */
     AFRAME.registerComponent('grabber', {
       schema: {
-        reach: { type: 'number', default: 0.06 } // metres of slack around object bounds
+        reach: { type: 'number', default: 0.10 } // metres of slack around object bounds
       },
       init() {
         this.grabbed = null;
+        this.grabButton = null;
         this.hovered = null;
         this.box = new THREE.Box3();
         this.ctrlPos = new THREE.Vector3();
@@ -51,11 +53,25 @@
 
         this.onDown = this.onDown.bind(this);
         this.onUp = this.onUp.bind(this);
+        this.reset = this.reset.bind(this);
+        this.el.sceneEl.addEventListener('exit-vr', this.reset);
+        this.el.addEventListener('controllerdisconnected', this.reset);
         ['gripdown', 'triggerdown'].forEach(e => this.el.addEventListener(e, this.onDown));
         ['gripup', 'triggerup'].forEach(e => this.el.addEventListener(e, this.onUp));
       },
 
+      reset() {
+        this.release();
+        if (this.hovered && this.hovered.components.grabbable) {
+          this.hovered.components.grabbable.setHover(false);
+        }
+        this.hovered = null;
+      },
+
       remove() {
+        this.reset();
+        this.el.sceneEl.removeEventListener('exit-vr', this.reset);
+        this.el.removeEventListener('controllerdisconnected', this.reset);
         ['gripdown', 'triggerdown'].forEach(e => this.el.removeEventListener(e, this.onDown));
         ['gripup', 'triggerup'].forEach(e => this.el.removeEventListener(e, this.onUp));
       },
@@ -64,8 +80,8 @@
       findTarget() {
         this.el.object3D.getWorldPosition(this.ctrlPos);
         let best = null, bestDist = Infinity;
-        this.el.sceneEl.querySelectorAll('[grabbable]').forEach(el => {
-          if (!el.object3D.visible) return;
+        this.el.sceneEl.querySelectorAll('.grab-target').forEach(el => {
+          if (!el.components.grabbable || !el.getObject3D('mesh') || !el.object3D.visible) return;
           this.box.setFromObject(el.object3D).expandByScalar(this.data.reach);
           if (!this.box.containsPoint(this.ctrlPos)) return;
           el.object3D.getWorldPosition(this.objPos);
@@ -76,7 +92,7 @@
       },
 
       tick() {
-        if (this.grabbed) return;
+        if (this.grabbed || !this.el.sceneEl.renderer?.xr.isPresenting) return;
         const target = this.findTarget();
         if (target === this.hovered) return;
         if (this.hovered) this.hovered.components.grabbable.setHover(false);
@@ -87,9 +103,9 @@
         this.hovered = target;
       },
 
-      onDown() {
-        if (this.grabbed) return;
-        const target = this.hovered || this.findTarget();
+      onDown(event) {
+        if (this.grabbed || !this.el.sceneEl.renderer?.xr.isPresenting) return;
+        const target = this.findTarget();
         if (!target) return;
         const g = target.components.grabbable;
 
@@ -101,12 +117,15 @@
         // attach() keeps the world transform, so the object doesn't jump.
         this.el.object3D.attach(target.object3D);
         this.grabbed = target;
+        this.grabButton = event.type;
         g.refresh();
         this.pulse(0.6, 40);
         target.emit('grab-start', { hand: this.el });
       },
 
-      onUp() { this.release(); },
+      onUp(event) {
+        if (event.type.replace('up', 'down') === this.grabButton) this.release();
+      },
 
       release() {
         const target = this.grabbed;
@@ -123,6 +142,7 @@
         });
         g.heldBy = null;
         this.grabbed = null;
+        this.grabButton = null;
         g.refresh();
         this.pulse(0.3, 20);
         target.emit('grab-end', { hand: this.el });
@@ -143,6 +163,12 @@
     window.addEventListener('DOMContentLoaded', () => {
       const scene = document.querySelector('a-scene');
       const help = document.getElementById('help');
+      const exitImmersive = () => {
+        if (!scene.renderer?.xr.isPresenting) return;
+        scene.exitVR().catch(error => console.error('Could not exit immersive mode', error));
+      };
+      scene.querySelector('[meta-touch-controls="hand: right"]').addEventListener('bbuttondown', exitImmersive);
+      scene.querySelector('[meta-touch-controls="hand: left"]').addEventListener('ybuttondown', exitImmersive);
       scene.addEventListener('enter-vr', () => { help.style.display = 'none'; });
       scene.addEventListener('exit-vr',  () => { help.style.display = ''; });
     });
@@ -163,7 +189,8 @@
     <b>Browser:</b> drag to look around, WASD to move.<br />
     <b>Quest 3:</b> press the <b>AR</b> button (bottom right) for Mixed Reality
     with passthrough, or <b>VR</b> for a fully virtual view.<br />
-    Touch the box with a controller and squeeze <b>grip</b> (or trigger) to pick it up.
+    Touch the box with a controller and squeeze <b>grip</b> (or trigger) to pick it up. Release to drop.<br />
+    Press <b>B</b> (right) or <b>Y</b> (left) to return to the web page.
   </div>
 
   <!--
@@ -183,19 +210,19 @@
     <a-plane rotation="-90 0 0" width="20" height="20" color="#374151" hide-on-enter-ar></a-plane>
 
     <!-- Grabbable objects (within arm's reach of a standing user) -->
-    <a-box id="box" grabbable
+    <a-box id="box" class="grab-target" grabbable
            position="0 1.2 -0.6" rotation="0 30 0"
            width="0.2" height="0.2" depth="0.2"
            material="color: #4f9dff; roughness: 0.4; metalness: 0.1">
     </a-box>
 
-    <a-box grabbable
+    <a-box class="grab-target" grabbable
            position="0.35 1.1 -0.55"
            width="0.12" height="0.12" depth="0.12"
            material="color: #ff7a59; roughness: 0.5">
     </a-box>
 
-    <a-sphere grabbable
+    <a-sphere class="grab-target" grabbable
               position="-0.35 1.1 -0.55" radius="0.07"
               material="color: #6ee7a8; roughness: 0.3">
     </a-sphere>
