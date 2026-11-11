@@ -8,7 +8,7 @@
 
   <script>
     window.addEventListener('error', event => {
-      if (event.filename && !event.filename.includes('aframe.min.js')) {
+      if (event.message) {
         window.webxrDemoError = event.message;
         const status = document.getElementById('xr-status');
         if (status) status.textContent = 'Demo error: ' + event.message;
@@ -17,12 +17,14 @@
   </script>
   <script>
     (() => {
-    const THREE = AFRAME.THREE;
+    try {
+    const THREE = AFRAME.THREE || window.THREE;
+    if (!THREE) throw new Error('A-Frame did not expose Three.js');
     /* ------------------------------------------------------------------
-     * grabbable: marks an entity as something a controller can pick up.
+     * demo-grabbable: marks an entity as something a controller can pick up.
      * Handles its own hover / grab highlight.
      * ------------------------------------------------------------------ */
-    AFRAME.registerComponent('grabbable', {
+    AFRAME.registerComponent('demo-grabbable', {
       schema: {
         hoverColor: { type: 'color', default: '#ffff00' },
         grabColor:  { type: 'color', default: '#888888' }
@@ -45,11 +47,11 @@
     });
 
     /* ------------------------------------------------------------------
-     * grabber: put on each motion controller. Squeeze the grip (or pull
+     * demo-grabber: put on each motion controller. Squeeze the grip (or pull
      * the trigger) while the controller is touching a grabbable object to
      * pick it up; release to drop it where it is.
      * ------------------------------------------------------------------ */
-    AFRAME.registerComponent('grabber', {
+    AFRAME.registerComponent('demo-grabber', {
       schema: {
         hand: { default: 'left', oneOf: ['left', 'right'] },
         reach: { type: 'number', default: 0.10 } // metres of slack around object bounds
@@ -77,8 +79,8 @@
       reset() {
         this.release();
         this.grabPressed = false;
-        if (this.hovered && this.hovered.components.grabbable) {
-          this.hovered.components.grabbable.setHover(false);
+        if (this.hovered && this.hovered.components['demo-grabbable']) {
+          this.hovered.components['demo-grabbable'].setHover(false);
         }
         this.hovered = null;
       },
@@ -96,7 +98,7 @@
         this.el.object3D.getWorldPosition(this.ctrlPos);
         let best = null, bestDist = Infinity;
         this.el.sceneEl.querySelectorAll('.grab-target').forEach(el => {
-          if (!el.components.grabbable || !el.getObject3D('mesh') || !el.object3D.visible) return;
+          if (!el.components['demo-grabbable'] || !el.getObject3D('mesh') || !el.object3D.visible) return;
           el.object3D.updateWorldMatrix(true, false);
           this.box.setFromObject(el.object3D).expandByScalar(this.data.reach);
           if (!this.box.containsPoint(this.ctrlPos)) return;
@@ -125,9 +127,9 @@
 
         const target = this.findTarget();
         if (target === this.hovered) return;
-        if (this.hovered) this.hovered.components.grabbable.setHover(false);
+        if (this.hovered) this.hovered.components['demo-grabbable'].setHover(false);
         if (target) {
-          target.components.grabbable.setHover(true);
+          target.components['demo-grabbable'].setHover(true);
           this.pulse(0.15, 15);
         }
         this.hovered = target;
@@ -137,10 +139,10 @@
         if (this.grabbed || !this.el.sceneEl.xrSession) return;
         const target = this.findTarget();
         if (!target) return;
-        const g = target.components.grabbable;
+        const g = target.components['demo-grabbable'];
 
         // If the other hand is holding it, hand it over.
-        if (g.heldBy && g.heldBy !== this.el) g.heldBy.components.grabber.release();
+        if (g.heldBy && g.heldBy !== this.el) g.heldBy.components['demo-grabber'].release();
 
         g.originalParent = g.originalParent || target.object3D.parent;
         g.heldBy = this.el;
@@ -155,7 +157,7 @@
       release() {
         const target = this.grabbed;
         if (!target) return;
-        const g = target.components.grabbable;
+        const g = target.components['demo-grabbable'];
         (g.originalParent || this.el.sceneEl.object3D).attach(target.object3D);
         // Sync the A-Frame attributes with the new transform.
         const o = target.object3D;
@@ -269,6 +271,12 @@
         button.setAttribute('material', 'color', idleColor);
       });
     });
+    } catch (error) {
+      window.webxrDemoError = 'Demo startup error: ' + error.message;
+      document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('xr-status').textContent = window.webxrDemoError;
+      }, { once: true });
+    }
     })();
   </script>
 
@@ -284,7 +292,7 @@
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.5<br />
+    <b>Version:</b> 2026-11-11.6<br />
     <span id="xr-status">Waiting for demo controls</span><br />
     <b>Browser:</b> drag to look around, WASD to move.<br />
     <b>Quest 3:</b> press the <b>AR</b> button (bottom right) for Mixed Reality
@@ -310,19 +318,19 @@
     <a-plane rotation="-90 0 0" width="20" height="20" color="#374151" hide-on-enter-ar></a-plane>
 
     <!-- Grabbable objects (within arm's reach of a standing user) -->
-    <a-box id="box" class="grab-target" grabbable
+    <a-box id="box" class="grab-target" demo-grabbable
            position="0 1.2 -0.6" rotation="0 30 0"
            width="0.2" height="0.2" depth="0.2"
            material="color: #4f9dff; roughness: 0.4; metalness: 0.1">
     </a-box>
 
-    <a-box class="grab-target" grabbable
+    <a-box class="grab-target" demo-grabbable
            position="0.35 1.1 -0.55"
            width="0.12" height="0.12" depth="0.12"
            material="color: #ff7a59; roughness: 0.5">
     </a-box>
 
-    <a-sphere class="grab-target" grabbable
+    <a-sphere class="grab-target" demo-grabbable
               position="-0.35 1.1 -0.55" radius="0.07"
               material="color: #6ee7a8; roughness: 0.3">
     </a-sphere>
@@ -335,8 +343,8 @@
                text="value: Exit; align: center; color: #ffffff; width: 1.3; zOffset: 0.005">
       </a-plane>
       <a-entity camera look-controls wasd-controls position="0 1.6 0"></a-entity>
-      <a-entity laser-controls="hand: left" raycaster="objects: #xr-exit; far: 8; lineColor: #a5d8ff" grabber></a-entity>
-      <a-entity laser-controls="hand: right" raycaster="objects: #xr-exit; far: 8; lineColor: #a5d8ff" grabber="hand: right"></a-entity>
+      <a-entity laser-controls="hand: left" raycaster="objects: #xr-exit; far: 8; lineColor: #a5d8ff" demo-grabber></a-entity>
+      <a-entity laser-controls="hand: right" raycaster="objects: #xr-exit; far: 8; lineColor: #a5d8ff" demo-grabber="hand: right"></a-entity>
     </a-entity>
   </a-scene>
 </body>
