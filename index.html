@@ -223,6 +223,46 @@
       init() {
         this.forward = new THREE.Vector3();
         this.right = new THREE.Vector3();
+        this.sticks = Array.from(document.querySelectorAll('[data-flat-stick]'), element => {
+          const stick = { x: 0, y: 0, pointer: null };
+          const update = event => {
+            const bounds = element.getBoundingClientRect();
+            const radius = bounds.width / 2;
+            const x = (event.clientX - bounds.left - bounds.width / 2) / radius;
+            const y = (event.clientY - bounds.top - bounds.height / 2) / radius;
+            const scale = Math.max(1, Math.hypot(x, y));
+            stick.x = x / scale;
+            stick.y = y / scale;
+            element.style.setProperty('--stick-x', (stick.x * 25) + 'px');
+            element.style.setProperty('--stick-y', (stick.y * 25) + 'px');
+          };
+          const reset = event => {
+            if (event && event.pointerId !== stick.pointer) return;
+            stick.pointer = null;
+            stick.x = stick.y = 0;
+            element.style.setProperty('--stick-x', '0px');
+            element.style.setProperty('--stick-y', '0px');
+          };
+          stick.listeners = new AbortController();
+          const options = { signal: stick.listeners.signal };
+          element.addEventListener('pointerdown', event => {
+            if (event.button !== 0 || stick.pointer !== null) return;
+            stick.pointer = event.pointerId;
+            element.setPointerCapture(event.pointerId);
+            update(event);
+          }, options);
+          element.addEventListener('pointermove', event => {
+            if (event.pointerId === stick.pointer) update(event);
+          }, options);
+          for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+            element.addEventListener(name, reset, options);
+          }
+          this.el.sceneEl.addEventListener('enter-vr', () => reset(), options);
+          return stick;
+        });
+      },
+      remove() {
+        for (const stick of this.sticks) stick.listeners.abort();
       },
       tick(time, delta) {
         const scene = this.el.sceneEl;
@@ -250,9 +290,10 @@
         };
         const rightOffset = right?.axes.length >= 4 ? 2 : 0;
         const leftOffset = left?.axes.length >= 4 ? 2 : 0;
-        const strafe = stick(right?.axes[rightOffset] ?? standard?.axes[2]);
-        const advance = -stick(right?.axes[rightOffset + 1] ?? standard?.axes[3]);
-        const lift = -stick(left?.axes[leftOffset + 1] ?? standard?.axes[1]);
+        const [flatLeft, flatRight] = session ? [] : this.sticks;
+        const strafe = stick(flatRight?.x || (right?.axes[rightOffset] ?? standard?.axes[2]));
+        const advance = -stick(flatRight?.y || (right?.axes[rightOffset + 1] ?? standard?.axes[3]));
+        const lift = -stick(flatLeft?.y || (left?.axes[leftOffset + 1] ?? standard?.axes[1]));
         if (!strafe && !advance && !lift) return;
 
         const camera = session ? xr.getCamera() : scene.camera;
@@ -272,6 +313,7 @@
     window.addEventListener('DOMContentLoaded', () => {
       const scene = document.querySelector('a-scene');
       const help = document.getElementById('help');
+      const flatSticks = document.querySelectorAll('[data-flat-stick]');
       const labelMixedReality = () => {
         const entry = scene.querySelector('.a-enter-ar-button');
         entry?.setAttribute('title', 'Enter mixed reality');
@@ -348,6 +390,7 @@
 
       scene.addEventListener('enter-vr', () => {
         help.style.display = 'none';
+        flatSticks.forEach(stick => { stick.hidden = true; });
         status.textContent = 'XR session started';
         button.setAttribute('visible', true);
         placeExit();
@@ -355,6 +398,7 @@
       });
       scene.addEventListener('exit-vr', () => {
         help.style.display = '';
+        flatSticks.forEach(stick => { stick.hidden = false; });
         scene.xrSession?.cancelAnimationFrame(placementFrame);
         button.setAttribute('visible', false);
         button.setAttribute('material', 'color', idleColor);
@@ -382,14 +426,29 @@
       color: currentColor;
       font: 700 16px system-ui, sans-serif;
     }
+    [data-flat-stick] {
+      position: fixed; bottom: 70px; z-index: 10;
+      width: 84px; height: 84px; border-radius: 50%;
+      border: 1px solid #a5d8ff; background: #102841cc; color: #fff;
+      touch-action: none; user-select: none; cursor: grab;
+      font: 600 12px system-ui, sans-serif;
+    }
+    [data-flat-stick="left"] { left: 20px; }
+    [data-flat-stick="right"] { right: 20px; }
+    [data-flat-stick]::before {
+      content: ""; position: absolute; inset: 25px;
+      border-radius: 50%; background: #a5d8ff; pointer-events: none;
+      transform: translate(var(--stick-x, 0px), var(--stick-y, 0px));
+    }
+    [data-flat-stick] span { position: absolute; bottom: 6px; inset-inline: 0; pointer-events: none; }
   </style>
 </head>
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.7<br />
+    <b>Version:</b> 2026-11-11.8<br />
     <span id="xr-status">Waiting for demo controls</span><br />
-    <b>Browser:</b> drag to look around, WASD to move. In VR or with a browser gamepad, use the right stick to move and the left stick to rise or descend.<br />
+    <b>Browser:</b> drag to look around, WASD to move. Drag the Move stick to travel or the Height stick to rise and descend.<br />
     <b>Quest 3:</b> press the <b>MR</b> button (bottom right) for Mixed Reality
     with passthrough, or <b>VR</b> for a fully virtual view.<br />
     Touch the box with a controller and squeeze <b>grip</b> (or trigger) to pick it up. Release grip and trigger to drop.<br />
@@ -400,6 +459,8 @@
     xr-mode-ui XRMode: xr  -> shows both "VR" and "AR" buttons when supported.
     On Quest 3, AR = immersive-ar = colour passthrough of your room.
   -->
+  <button type="button" data-flat-stick="left" aria-label="Drag up or down to change height"><span>Height</span></button>
+  <button type="button" data-flat-stick="right" aria-label="Drag to move horizontally"><span>Move</span></button>
   <a-scene xr-mode-ui="XRMode: xr"
            webxr="optionalFeatures: hand-tracking"
            renderer="antialias: true; colorManagement: true">
