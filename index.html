@@ -187,6 +187,31 @@
     /* ------------------------------------------------------------------
      * Show the help panel only outside immersive mode.
      * ------------------------------------------------------------------ */
+    AFRAME.registerComponent('demo-fit-model', {
+      init() {
+        this.fit = () => {
+          const mesh = this.el.getObject3D('mesh');
+          if (!mesh) return;
+
+          mesh.updateWorldMatrix(true, true);
+          const bounds = new THREE.Box3().setFromObject(mesh);
+          const size = bounds.getSize(new THREE.Vector3());
+          const longestSide = Math.max(size.x, size.y, size.z);
+          if (!Number.isFinite(longestSide) || longestSide <= 0) return;
+
+          const center = bounds.getCenter(new THREE.Vector3());
+          this.el.object3D.parent.worldToLocal(center);
+          const scale = 0.20 / longestSide;
+          this.el.object3D.scale.setScalar(scale);
+          this.el.object3D.position.copy(center).multiplyScalar(-scale);
+        };
+        this.el.addEventListener('model-loaded', this.fit);
+      },
+      remove() {
+        this.el.removeEventListener('model-loaded', this.fit);
+      }
+    });
+
     AFRAME.registerComponent('demo-touch-pitch', {
       init() {
         const scene = this.el.sceneEl;
@@ -446,7 +471,7 @@
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.8<br />
+    <b>Version:</b> 2026-11-11.9<br />
     <span id="xr-status">Waiting for demo controls</span><br />
     <b>Browser:</b> drag to look around, WASD to move. Drag the Move stick to travel or the Height stick to rise and descend.<br />
     <b>Quest 3:</b> press the <b>MR</b> button (bottom right) for Mixed Reality
@@ -490,6 +515,10 @@
               position="-0.35 1.1 -0.55" radius="0.07"
               material="color: #6ee7a8; roughness: 0.3">
     </a-sphere>
+
+    <a-entity position="0 1.47 -0.63">
+      <a-entity gltf-model="url(./dragon.glb)" demo-fit-model></a-entity>
+    </a-entity>
 
     <!-- Player rig: camera + both Quest Touch controllers -->
     <a-entity id="rig" position="0 0 0" demo-thumbstick-movement>
