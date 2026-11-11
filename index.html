@@ -41,27 +41,26 @@
      * ------------------------------------------------------------------ */
     AFRAME.registerComponent('grabber', {
       schema: {
+        hand: { default: 'left', oneOf: ['left', 'right'] },
         reach: { type: 'number', default: 0.10 } // metres of slack around object bounds
       },
       init() {
         this.grabbed = null;
-        this.grabButton = null;
+        this.grabPressed = false;
         this.hovered = null;
         this.box = new THREE.Box3();
         this.ctrlPos = new THREE.Vector3();
         this.objPos = new THREE.Vector3();
+        this.poseMatrix = new THREE.Matrix4();
 
-        this.onDown = this.onDown.bind(this);
-        this.onUp = this.onUp.bind(this);
         this.reset = this.reset.bind(this);
         this.el.sceneEl.addEventListener('exit-vr', this.reset);
         this.el.addEventListener('controllerdisconnected', this.reset);
-        ['gripdown', 'triggerdown'].forEach(e => this.el.addEventListener(e, this.onDown));
-        ['gripup', 'triggerup'].forEach(e => this.el.addEventListener(e, this.onUp));
       },
 
       reset() {
         this.release();
+        this.grabPressed = false;
         if (this.hovered && this.hovered.components.grabbable) {
           this.hovered.components.grabbable.setHover(false);
         }
@@ -72,8 +71,6 @@
         this.reset();
         this.el.sceneEl.removeEventListener('exit-vr', this.reset);
         this.el.removeEventListener('controllerdisconnected', this.reset);
-        ['gripdown', 'triggerdown'].forEach(e => this.el.removeEventListener(e, this.onDown));
-        ['gripup', 'triggerup'].forEach(e => this.el.removeEventListener(e, this.onUp));
       },
 
       // Nearest grabbable whose (slightly expanded) bounding box contains the controller.
@@ -92,7 +89,42 @@
       },
 
       tick() {
-        if (this.grabbed || !this.el.sceneEl.renderer?.xr.isPresenting) return;
+        const xr = this.el.sceneEl.renderer?.xr;
+        const session = xr?.getSession();
+        if (!xr?.isPresenting || !session) return;
+
+        const source = Array.from(session.inputSources).find(input =>
+          input.handedness === this.data.hand && input.gamepad && input.gripSpace
+        );
+        if (!source) {
+          this.reset();
+          return;
+        }
+
+        const buttons = source.gamepad.buttons;
+        // Quest Touch Plus maps trigger, grip, and B/Y to indices 0, 1, and 5.
+        if (buttons[5]?.pressed && !this.el.sceneEl.exitingImmersive) {
+          const scene = this.el.sceneEl;
+          scene.exitingImmersive = true;
+          session.end()
+            .catch(error => console.error('Could not exit immersive mode', error))
+            .finally(() => { scene.exitingImmersive = false; });
+          return;
+        }
+
+        const pressed = Boolean(buttons[0]?.pressed || buttons[1]?.pressed);
+        if (!pressed && this.grabbed) this.release();
+
+        const referenceSpace = xr.getReferenceSpace();
+        const pose = referenceSpace && xr.getFrame()?.getPose(source.gripSpace, referenceSpace);
+        if (!pose) return;
+        const controller = this.el.object3D;
+        this.poseMatrix.fromArray(pose.transform.matrix);
+        this.poseMatrix.decompose(controller.position, controller.quaternion, controller.scale);
+
+        if (pressed && !this.grabPressed) this.grab();
+        this.grabPressed = pressed;
+        if (this.grabbed) return;
         const target = this.findTarget();
         if (target === this.hovered) return;
         if (this.hovered) this.hovered.components.grabbable.setHover(false);
@@ -103,7 +135,7 @@
         this.hovered = target;
       },
 
-      onDown(event) {
+      grab() {
         if (this.grabbed || !this.el.sceneEl.renderer?.xr.isPresenting) return;
         const target = this.findTarget();
         if (!target) return;
@@ -117,14 +149,9 @@
         // attach() keeps the world transform, so the object doesn't jump.
         this.el.object3D.attach(target.object3D);
         this.grabbed = target;
-        this.grabButton = event.type;
         g.refresh();
         this.pulse(0.6, 40);
         target.emit('grab-start', { hand: this.el });
-      },
-
-      onUp(event) {
-        if (event.type.replace('up', 'down') === this.grabButton) this.release();
       },
 
       release() {
@@ -142,7 +169,7 @@
         });
         g.heldBy = null;
         this.grabbed = null;
-        this.grabButton = null;
+        this.grabPressed = false;
         g.refresh();
         this.pulse(0.3, 20);
         target.emit('grab-end', { hand: this.el });
@@ -163,12 +190,6 @@
     window.addEventListener('DOMContentLoaded', () => {
       const scene = document.querySelector('a-scene');
       const help = document.getElementById('help');
-      const exitImmersive = () => {
-        if (!scene.renderer?.xr.isPresenting) return;
-        scene.exitVR().catch(error => console.error('Could not exit immersive mode', error));
-      };
-      scene.querySelector('[meta-touch-controls="hand: right"]').addEventListener('bbuttondown', exitImmersive);
-      scene.querySelector('[meta-touch-controls="hand: left"]').addEventListener('ybuttondown', exitImmersive);
       scene.addEventListener('enter-vr', () => { help.style.display = 'none'; });
       scene.addEventListener('exit-vr',  () => { help.style.display = ''; });
     });
@@ -186,11 +207,11 @@
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.1<br />
+    <b>Version:</b> 2026-11-11.2<br />
     <b>Browser:</b> drag to look around, WASD to move.<br />
     <b>Quest 3:</b> press the <b>AR</b> button (bottom right) for Mixed Reality
     with passthrough, or <b>VR</b> for a fully virtual view.<br />
-    Touch the box with a controller and squeeze <b>grip</b> (or trigger) to pick it up. Release to drop.<br />
+    Touch the box with a controller and squeeze <b>grip</b> (or trigger) to pick it up. Release grip and trigger to drop.<br />
     Press <b>B</b> (right) or <b>Y</b> (left) to return to the web page.
   </div>
 
@@ -232,7 +253,7 @@
     <a-entity id="rig" position="0 0 0">
       <a-entity camera look-controls wasd-controls position="0 1.6 0"></a-entity>
       <a-entity meta-touch-controls="hand: left"  grabber></a-entity>
-      <a-entity meta-touch-controls="hand: right" grabber></a-entity>
+      <a-entity meta-touch-controls="hand: right" grabber="hand: right"></a-entity>
     </a-entity>
   </a-scene>
 </body>
