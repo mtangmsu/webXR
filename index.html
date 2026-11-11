@@ -51,7 +51,10 @@
         this.box = new THREE.Box3();
         this.ctrlPos = new THREE.Vector3();
         this.objPos = new THREE.Vector3();
-        this.poseMatrix = new THREE.Matrix4();
+        this.onGrabDown = () => this.grab();
+        this.onGrabUp = () => this.release();
+        this.el.addEventListener('gripdown', this.onGrabDown);
+        this.el.addEventListener('gripup', this.onGrabUp);
 
         this.reset = this.reset.bind(this);
         this.el.sceneEl.addEventListener('exit-vr', this.reset);
@@ -68,6 +71,8 @@
       },
 
       remove() {
+        this.el.removeEventListener('gripdown', this.onGrabDown);
+        this.el.removeEventListener('gripup', this.onGrabUp);
         this.reset();
         this.el.sceneEl.removeEventListener('exit-vr', this.reset);
         this.el.removeEventListener('controllerdisconnected', this.reset);
@@ -79,6 +84,7 @@
         let best = null, bestDist = Infinity;
         this.el.sceneEl.querySelectorAll('.grab-target').forEach(el => {
           if (!el.components.grabbable || !el.getObject3D('mesh') || !el.object3D.visible) return;
+          el.object3D.updateWorldMatrix(true, false);
           this.box.setFromObject(el.object3D).expandByScalar(this.data.reach);
           if (!this.box.containsPoint(this.ctrlPos)) return;
           el.object3D.getWorldPosition(this.objPos);
@@ -91,39 +97,19 @@
       tick() {
         const xr = this.el.sceneEl.renderer?.xr;
         const session = this.el.sceneEl.xrSession || xr?.getSession();
-        if (!xr?.isPresenting || !session) return;
+        if (!session) return;
 
         const source = Array.from(session.inputSources).find(input =>
           input.handedness === this.data.hand && input.gamepad && input.gripSpace
         );
-        if (!source) {
-          this.reset();
-          return;
+        const buttons = source?.gamepad.buttons;
+        if (buttons) {
+          const pressed = Boolean(buttons[0]?.pressed || buttons[1]?.pressed);
+          if (!pressed && this.grabPressed) this.release();
+          if (pressed && !this.grabPressed) this.grab();
+          this.grabPressed = pressed;
         }
 
-        const buttons = source.gamepad.buttons;
-        // Quest Touch Plus maps trigger, grip, and B/Y to indices 0, 1, and 5.
-        if (buttons[5]?.pressed && !this.el.sceneEl.exitingImmersive) {
-          const scene = this.el.sceneEl;
-          scene.exitingImmersive = true;
-          session.end()
-            .catch(error => console.error('Could not exit immersive mode', error))
-            .finally(() => { scene.exitingImmersive = false; });
-          return;
-        }
-
-        const pressed = Boolean(buttons[0]?.pressed || buttons[1]?.pressed);
-        if (!pressed && this.grabbed) this.release();
-
-        const referenceSpace = xr.getReferenceSpace();
-        const pose = referenceSpace && (this.el.sceneEl.frame || xr.getFrame())?.getPose(source.gripSpace, referenceSpace);
-        if (!pose) return;
-        const controller = this.el.object3D;
-        this.poseMatrix.fromArray(pose.transform.matrix);
-        this.poseMatrix.decompose(controller.position, controller.quaternion, controller.scale);
-
-        if (pressed && !this.grabPressed) this.grab();
-        this.grabPressed = pressed;
         const target = this.findTarget();
         if (target === this.hovered) return;
         if (this.hovered) this.hovered.components.grabbable.setHover(false);
@@ -135,7 +121,7 @@
       },
 
       grab() {
-        if (this.grabbed || !this.el.sceneEl.renderer?.xr.isPresenting) return;
+        if (this.grabbed || !this.el.sceneEl.xrSession) return;
         const target = this.findTarget();
         if (!target) return;
         const g = target.components.grabbable;
@@ -190,6 +176,35 @@
       const scene = document.querySelector('a-scene');
       const help = document.getElementById('help');
       const button = document.getElementById('xr-exit');
+      const rig = document.getElementById('rig').object3D;
+      const viewerPosition = new THREE.Vector3();
+      const forward = new THREE.Vector3();
+      const viewerRotation = new THREE.Quaternion();
+      let placementFrame;
+      const placeExit = () => {
+        const xr = scene.renderer.xr;
+        const session = scene.xrSession || xr.getSession();
+        if (!session) return;
+        placementFrame = session.requestAnimationFrame((time, frame) => {
+          const space = xr.getReferenceSpace();
+          const viewer = space && frame.getViewerPose(space);
+          if (!viewer) {
+            placeExit();
+            return;
+          }
+          const { position, orientation } = viewer.transform;
+          viewerPosition.set(position.x, position.y, position.z);
+          viewerRotation.set(orientation.x, orientation.y, orientation.z, orientation.w);
+          forward.set(0, 0, -1).applyQuaternion(viewerRotation);
+          forward.y = 0;
+          if (forward.lengthSq() < 0.01) forward.set(0, 0, -1);
+          forward.normalize();
+          button.object3D.position.copy(viewerPosition).addScaledVector(forward, 1.25);
+          button.object3D.position.y += 0.12;
+          button.object3D.rotation.y = Math.atan2(-forward.x, -forward.z);
+          button.setAttribute('visible', true);
+        });
+      };
       const idleColor = '#20466a';
       const activeColor = '#356d9e';
       const exit = () => {
@@ -226,11 +241,12 @@
 
       scene.addEventListener('enter-vr', () => {
         help.style.display = 'none';
-        button.setAttribute('visible', true);
+        placeExit();
         scene.xrSession?.addEventListener('select', onSelect);
       });
       scene.addEventListener('exit-vr', () => {
         help.style.display = '';
+        scene.xrSession?.cancelAnimationFrame(placementFrame);
         button.setAttribute('visible', false);
         button.setAttribute('material', 'color', idleColor);
       });
@@ -249,7 +265,7 @@
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.3<br />
+    <b>Version:</b> 2026-11-11.4<br />
     <b>Browser:</b> drag to look around, WASD to move.<br />
     <b>Quest 3:</b> press the <b>AR</b> button (bottom right) for Mixed Reality
     with passthrough, or <b>VR</b> for a fully virtual view.<br />
@@ -294,7 +310,7 @@
     <!-- Player rig: camera + both Quest Touch controllers -->
     <a-entity id="rig" position="0 0 0">
       <a-plane id="xr-exit" visible="false" position="0 1.55 -1.15"
-               width="0.32" height="0.14"
+               width="0.42" height="0.19"
                material="shader: flat; color: #20466a; side: double"
                text="value: Exit; align: center; color: #ffffff; width: 1.3; zOffset: 0.005">
       </a-plane>
