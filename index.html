@@ -7,6 +7,16 @@
   <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
 
   <script>
+    window.addEventListener('error', event => {
+      if (event.filename && !event.filename.includes('aframe.min.js')) {
+        window.webxrDemoError = event.message;
+        const status = document.getElementById('xr-status');
+        if (status) status.textContent = 'Demo error: ' + event.message;
+      }
+    });
+  </script>
+  <script>
+    (() => {
     const THREE = AFRAME.THREE;
     /* ------------------------------------------------------------------
      * grabbable: marks an entity as something a controller can pick up.
@@ -51,7 +61,10 @@
         this.box = new THREE.Box3();
         this.ctrlPos = new THREE.Vector3();
         this.objPos = new THREE.Vector3();
-        this.onGrabDown = () => this.grab();
+        this.onGrabDown = () => {
+          document.getElementById('xr-status').textContent = 'Grip input received (' + this.data.hand + ')';
+          this.grab();
+        };
         this.onGrabUp = () => this.release();
         this.el.addEventListener('gripdown', this.onGrabDown);
         this.el.addEventListener('gripup', this.onGrabUp);
@@ -176,6 +189,8 @@
       const scene = document.querySelector('a-scene');
       const help = document.getElementById('help');
       const button = document.getElementById('xr-exit');
+      const status = document.getElementById('xr-status');
+      status.textContent = window.webxrDemoError || 'Demo controls loaded';
       const rig = document.getElementById('rig').object3D;
       const viewerPosition = new THREE.Vector3();
       const forward = new THREE.Vector3();
@@ -199,6 +214,7 @@
           forward.y = 0;
           if (forward.lengthSq() < 0.01) forward.set(0, 0, -1);
           forward.normalize();
+          status.textContent = 'Headset pose received; Exit placed';
           button.object3D.position.copy(viewerPosition).addScaledVector(forward, 1.25);
           button.object3D.position.y += 0.12;
           button.object3D.rotation.y = Math.atan2(-forward.x, -forward.z);
@@ -241,6 +257,8 @@
 
       scene.addEventListener('enter-vr', () => {
         help.style.display = 'none';
+        status.textContent = 'XR session started';
+        button.setAttribute('visible', true);
         placeExit();
         scene.xrSession?.addEventListener('select', onSelect);
       });
@@ -251,6 +269,7 @@
         button.setAttribute('material', 'color', idleColor);
       });
     });
+    })();
   </script>
 
   <style>
@@ -265,7 +284,8 @@
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.4<br />
+    <b>Version:</b> 2026-11-11.5<br />
+    <span id="xr-status">Waiting for demo controls</span><br />
     <b>Browser:</b> drag to look around, WASD to move.<br />
     <b>Quest 3:</b> press the <b>AR</b> button (bottom right) for Mixed Reality
     with passthrough, or <b>VR</b> for a fully virtual view.<br />
