@@ -22,12 +22,13 @@
     if (!THREE) throw new Error('A-Frame did not expose Three.js');
     /* ------------------------------------------------------------------
      * demo-grabbable: marks an entity as something a controller can pick up.
-     * Handles its own hover / grab highlight.
+     * Handles its own optional hover / grab highlight.
      * ------------------------------------------------------------------ */
     AFRAME.registerComponent('demo-grabbable', {
       schema: {
         hoverColor: { type: 'color', default: '#ffff00' },
-        grabColor:  { type: 'color', default: '#888888' }
+        grabColor:  { type: 'color', default: '#888888' },
+        highlight: { type: 'boolean', default: true }
       },
       init() {
         this.heldBy = null;          // controller entity currently holding this
@@ -39,6 +40,7 @@
         this.refresh();
       },
       refresh() {
+        if (!this.data.highlight) return;
         const color = this.hoverCount > 0 ? this.data.hoverColor
                     : this.heldBy ? this.data.grabColor
                     : '#000000';
@@ -517,7 +519,8 @@
     </a-sphere>
 
     <a-entity position="0 1.47 -0.63">
-      <a-entity gltf-model="url(./dragon.glb)" demo-fit-model></a-entity>
+      <a-entity class="grab-target" demo-grabbable="highlight: false"
+                gltf-model="url(./dragon.glb)" demo-fit-model></a-entity>
     </a-entity>
 
     <!-- Player rig: camera + both Quest Touch controllers -->
