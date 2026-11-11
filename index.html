@@ -33,6 +33,7 @@
       },
       init() {
         this.heldBy = null;          // controller entity currently holding this
+        this.twoHandGrab = null;
         this.hoverCount = 0;         // number of controllers hovering
         this.originalParent = null;  // THREE.Object3D to return to on release
       },
@@ -66,6 +67,7 @@
         this.box = new THREE.Box3();
         this.ctrlPos = new THREE.Vector3();
         this.objPos = new THREE.Vector3();
+        this.otherHandPos = new THREE.Vector3();
         this.onGrabDown = () => {
           document.getElementById('xr-status').textContent = 'Grip input received (' + this.data.hand + ')';
           this.grab();
@@ -128,6 +130,7 @@
           this.grabPressed = pressed;
         }
 
+        this.updateScale();
         const target = this.findTarget();
         if (target === this.hovered) return;
         if (this.hovered) this.hovered.components['demo-grabbable'].setHover(false);
@@ -138,14 +141,39 @@
         this.hovered = target;
       },
 
+      handDistance(otherHand) {
+        this.el.object3D.getWorldPosition(this.ctrlPos);
+        otherHand.object3D.getWorldPosition(this.otherHandPos);
+        return Math.max(0.01, this.ctrlPos.distanceTo(this.otherHandPos));
+      },
+
+      updateScale() {
+        const target = this.grabbed;
+        const g = target?.components['demo-grabbable'];
+        if (g?.heldBy !== this.el || !g.twoHandGrab) return;
+        const { secondHand, startDistance, startScale } = g.twoHandGrab;
+        const ratio = this.handDistance(secondHand) / startDistance;
+        target.object3D.scale.copy(startScale).multiplyScalar(ratio);
+      },
+
       grab() {
-        if (this.grabbed || !this.el.sceneEl.xrSession) return;
+        const scene = this.el.sceneEl;
+        if (this.grabbed || !(scene.xrSession || scene.renderer?.xr?.getSession())) return;
         const target = this.findTarget();
         if (!target) return;
         const g = target.components['demo-grabbable'];
 
-        // If the other hand is holding it, hand it over.
-        if (g.heldBy && g.heldBy !== this.el) g.heldBy.components['demo-grabber'].release();
+        if (g.heldBy) {
+          if (g.twoHandGrab) return;
+          g.twoHandGrab = {
+            secondHand: this.el,
+            startDistance: this.handDistance(g.heldBy),
+            startScale: target.object3D.scale.clone()
+          };
+          this.grabbed = target;
+          this.pulse(0.6, 40);
+          return;
+        }
 
         g.originalParent = g.originalParent || target.object3D.parent;
         g.heldBy = this.el;
@@ -161,6 +189,18 @@
         const target = this.grabbed;
         if (!target) return;
         const g = target.components['demo-grabbable'];
+        this.grabbed = null;
+        this.grabPressed = false;
+        if (g.twoHandGrab) {
+          if (g.heldBy === this.el) {
+            g.heldBy = g.twoHandGrab.secondHand;
+            g.heldBy.object3D.attach(target.object3D);
+          }
+          g.twoHandGrab = null;
+          this.pulse(0.3, 20);
+          return;
+        }
+
         (g.originalParent || this.el.sceneEl.object3D).attach(target.object3D);
         // Sync the A-Frame attributes with the new transform.
         const o = target.object3D;
@@ -170,9 +210,8 @@
           y: THREE.MathUtils.radToDeg(o.rotation.y),
           z: THREE.MathUtils.radToDeg(o.rotation.z)
         });
+        target.setAttribute('scale', { x: o.scale.x, y: o.scale.y, z: o.scale.z });
         g.heldBy = null;
-        this.grabbed = null;
-        this.grabPressed = false;
         g.refresh();
         this.pulse(0.3, 20);
         target.emit('grab-end', { hand: this.el });
@@ -474,12 +513,13 @@
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.9<br />
+    <b>Version:</b> 2026-11-11.10<br />
     <span id="xr-status">Waiting for demo controls</span><br />
     <b>Browser:</b> drag to look around, WASD to move. Drag the Move stick to travel or the Height stick to rise and descend.<br />
     <b>Quest 3:</b> press the <b>MR</b> button (bottom right) for Mixed Reality
     with passthrough, or <b>VR</b> for a fully virtual view.<br />
     Touch the box with a controller and squeeze <b>grip</b> (or trigger) to pick it up. Release grip and trigger to drop.<br />
+    Grab the same object with both controllers and move them apart or closer together to resize it.<br />
     Aim either controller laser at <b>Exit</b> and pull the trigger to return to the web page.
   </div>
 
