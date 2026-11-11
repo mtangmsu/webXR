@@ -187,9 +187,98 @@
     /* ------------------------------------------------------------------
      * Show the help panel only outside immersive mode.
      * ------------------------------------------------------------------ */
+    AFRAME.registerComponent('demo-touch-pitch', {
+      init() {
+        const scene = this.el.sceneEl;
+        this.start = event => { this.touchY = event.touches.length === 1 ? event.touches[0].clientY : null; };
+        this.move = event => {
+          const look = this.el.components['look-controls'];
+          if (!look?.data.enabled || scene.is('vr-mode') || event.touches.length !== 1 || this.touchY == null) return;
+          const y = event.touches[0].clientY;
+          const pitch = look.pitchObject.rotation;
+          pitch.x = THREE.MathUtils.clamp(pitch.x - (y - this.touchY) * 0.005, -Math.PI / 2, Math.PI / 2);
+          this.touchY = y;
+        };
+        this.end = () => { this.touchY = null; };
+        this.bindCanvas = () => {
+          this.canvas = scene.canvas;
+          this.canvas.addEventListener('touchstart', this.start, { passive: true });
+          this.canvas.addEventListener('touchmove', this.move, { passive: true });
+          this.canvas.addEventListener('touchend', this.end);
+          this.canvas.addEventListener('touchcancel', this.end);
+        };
+        if (scene.canvas) this.bindCanvas();
+        else scene.addEventListener('render-target-loaded', this.bindCanvas, { once: true });
+      },
+      remove() {
+        this.el.sceneEl.removeEventListener('render-target-loaded', this.bindCanvas);
+        this.canvas?.removeEventListener('touchstart', this.start);
+        this.canvas?.removeEventListener('touchmove', this.move);
+        this.canvas?.removeEventListener('touchend', this.end);
+        this.canvas?.removeEventListener('touchcancel', this.end);
+      }
+    });
+
+    AFRAME.registerComponent('demo-thumbstick-movement', {
+      init() {
+        this.forward = new THREE.Vector3();
+        this.right = new THREE.Vector3();
+      },
+      tick(time, delta) {
+        const scene = this.el.sceneEl;
+        if (!scene.camera || scene.is('ar-mode') || !delta) return;
+        const xr = scene.renderer?.xr;
+        const session = scene.xrSession || xr?.getSession();
+        let left, right, standard;
+        if (session) {
+          for (const input of session.inputSources) {
+            if (input.handedness === 'left') left = input.gamepad;
+            if (input.handedness === 'right') right = input.gamepad;
+          }
+        } else {
+          for (const pad of navigator.getGamepads?.() || []) {
+            if (!pad?.connected) continue;
+            if (pad.mapping === 'standard') standard = pad;
+            else if (pad.hand === 'left' || /\bleft\b/i.test(pad.id)) left = pad;
+            else if (pad.hand === 'right' || /\bright\b/i.test(pad.id)) right = pad;
+          }
+        }
+
+        const stick = value => {
+          const magnitude = Math.abs(value || 0);
+          return magnitude > 0.18 ? Math.sign(value) * (magnitude - 0.18) / 0.82 : 0;
+        };
+        const rightOffset = right?.axes.length >= 4 ? 2 : 0;
+        const leftOffset = left?.axes.length >= 4 ? 2 : 0;
+        const strafe = stick(right?.axes[rightOffset] ?? standard?.axes[2]);
+        const advance = -stick(right?.axes[rightOffset + 1] ?? standard?.axes[3]);
+        const lift = -stick(left?.axes[leftOffset + 1] ?? standard?.axes[1]);
+        if (!strafe && !advance && !lift) return;
+
+        const camera = session ? xr.getCamera() : scene.camera;
+        camera.getWorldDirection(this.forward);
+        this.forward.y = 0;
+        if (this.forward.lengthSq() < 0.0001) this.forward.set(0, 0, -1);
+        this.forward.normalize();
+        this.right.set(-this.forward.z, 0, this.forward.x);
+        const step = Math.min(delta, 50) * 0.001;
+        const horizontal = 1.5 * step / Math.max(1, Math.hypot(strafe, advance));
+        this.el.object3D.position.addScaledVector(this.forward, advance * horizontal);
+        this.el.object3D.position.addScaledVector(this.right, strafe * horizontal);
+        this.el.object3D.position.y += lift * step;
+      }
+    });
+
     window.addEventListener('DOMContentLoaded', () => {
       const scene = document.querySelector('a-scene');
       const help = document.getElementById('help');
+      const labelMixedReality = () => {
+        const entry = scene.querySelector('.a-enter-ar-button');
+        entry?.setAttribute('title', 'Enter mixed reality');
+        entry?.setAttribute('aria-label', 'Enter mixed reality');
+      };
+      labelMixedReality();
+      scene.addEventListener('loaded', labelMixedReality, { once: true });
       const button = document.getElementById('xr-exit');
       const status = document.getElementById('xr-status');
       status.textContent = window.webxrDemoError || 'Demo controls loaded';
@@ -287,15 +376,21 @@
       background: rgba(0, 0, 0, 0.6); padding: 12px 14px; border-radius: 8px;
     }
     #help b { color: #ffd166; }
+    .a-enter-ar .a-enter-ar-button { background-image: none; }
+    .a-enter-ar .a-enter-ar-button::after {
+      content: "MR";
+      color: currentColor;
+      font: 700 16px system-ui, sans-serif;
+    }
   </style>
 </head>
 
 <body>
   <div id="help">
-    <b>Version:</b> 2026-11-11.6<br />
+    <b>Version:</b> 2026-11-11.7<br />
     <span id="xr-status">Waiting for demo controls</span><br />
-    <b>Browser:</b> drag to look around, WASD to move.<br />
-    <b>Quest 3:</b> press the <b>AR</b> button (bottom right) for Mixed Reality
+    <b>Browser:</b> drag to look around, WASD to move. In VR or with a browser gamepad, use the right stick to move and the left stick to rise or descend.<br />
+    <b>Quest 3:</b> press the <b>MR</b> button (bottom right) for Mixed Reality
     with passthrough, or <b>VR</b> for a fully virtual view.<br />
     Touch the box with a controller and squeeze <b>grip</b> (or trigger) to pick it up. Release grip and trigger to drop.<br />
     Aim either controller laser at <b>Exit</b> and pull the trigger to return to the web page.
@@ -336,13 +431,13 @@
     </a-sphere>
 
     <!-- Player rig: camera + both Quest Touch controllers -->
-    <a-entity id="rig" position="0 0 0">
+    <a-entity id="rig" position="0 0 0" demo-thumbstick-movement>
       <a-plane id="xr-exit" visible="false" position="0 1.55 -1.15"
                width="0.42" height="0.19"
                material="shader: flat; color: #20466a; side: double"
                text="value: Exit; align: center; color: #ffffff; width: 1.3; zOffset: 0.005">
       </a-plane>
-      <a-entity camera look-controls wasd-controls position="0 1.6 0"></a-entity>
+      <a-entity camera look-controls demo-touch-pitch wasd-controls position="0 1.6 0"></a-entity>
       <a-entity laser-controls="hand: left" raycaster="objects: #xr-exit; far: 8; lineColor: #a5d8ff" demo-grabber></a-entity>
       <a-entity laser-controls="hand: right" raycaster="objects: #xr-exit; far: 8; lineColor: #a5d8ff" demo-grabber="hand: right"></a-entity>
     </a-entity>
